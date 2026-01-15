@@ -1,0 +1,12 @@
+services:
+  antifraud-service:
+    image: "${IMAGE_NAME}"
+    ports:
+      - "8080:8080"
+  antifraud-checker:
+    image: "registry.prodcontest.com:443/2026-test-repos/ml/checker:${ML_CHECKER_TAG}"
+    volumes:
+      - ./reports:/reports
+    depends_on:
+      antifraud-service:
+        condition: service_started
