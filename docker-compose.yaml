@@ -1,12 +1,24 @@
+x-dnsfix: &dnsfix
+  dns_search:
+    - .
+  dns_opt:
+    - ndots:0
 services:
   antifraud-service:
+    <<: *dnsfix
     image: "${IMAGE_NAME}"
+    networks: [isolated]
     ports:
       - "8080:8080"
   antifraud-checker:
+    <<: *dnsfix
     image: "registry.prodcontest.com:443/2026-test-repos/ml/checker:${ML_CHECKER_TAG}"
+    networks: [isolated]
     volumes:
       - ./reports:/reports
     depends_on:
       antifraud-service:
         condition: service_started
+networks:
+  isolated:
+    internal: true
