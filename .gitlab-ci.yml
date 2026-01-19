@@ -69,7 +69,7 @@ export:
     - .global-variables
     - .rules-master
   needs:
-    - job: test
+    - job: tests
       artifacts: true
   rules:
     - when: on_success
