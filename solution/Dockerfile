@@ -2,11 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir --default-timeout=200 -r requirements.txt
+COPY solution/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-
-COPY . .
+COPY solution/app.py .
+COPY solution/features.py .
+COPY solution/model/ ./model/
 
 EXPOSE 8080
 
@@ -15,4 +16,5 @@ CMD ["python", "app.py"]
 
 
 
-# Fix for CI
+
+   
