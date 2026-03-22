@@ -1,23 +1,30 @@
-from flask import Flask, request, jsonify
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
 import joblib
-import numpy as np
-import pandas as pd
-from catboost import CatBoostClassifier
-from features import prepare_data, select_numeric, select_char_text, select_full_text, BadRequestError
+from flask import Flask, jsonify, request
+
+from features import BadRequestError, MODEL_NUMERIC_FEATURES, MODEL_TEXT_FEATURE, prepare_data
+
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_BUNDLE_PATH = BASE_DIR / "model" / "model_bundle.pkl"
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
+gunicorn_logger = logging.getLogger("gunicorn.error")
+if gunicorn_logger.handlers:
+    app.logger.handlers = gunicorn_logger.handlers
+    app.logger.setLevel(gunicorn_logger.level)
+else:
+    app.logger.setLevel(logging.INFO)
 
-model_cat = CatBoostClassifier()
-model_cat.load_model("model/model_cat.cbm")
-
-model_svc = joblib.load("model/model_svc.pkl")
-model_lr_char = joblib.load("model/model_lr_char.pkl")
-le = joblib.load("model/le_mcc.pkl")
-
-W_SVC = 0.6
-W_LR  = 0.25
-W_CAT = 0.15
+model_bundle = joblib.load(MODEL_BUNDLE_PATH)
+model = model_bundle["model"]
+model_metrics = model_bundle.get("metrics", {})
+model_version = model_bundle.get("version", "2.0.0")
 
 
 @app.route("/health", methods=["GET"])
@@ -25,137 +32,83 @@ def health():
     return jsonify({"status": "ok"})
 
 
-def ensemble_predict(df: pd.DataFrame):
-    numeric_features_ordered = [
-        'items_total_price', 'items_mean_price', 'items_price_std',
-        'items_min_price', 'items_max_price', 'items_price_range',
-        'items_vs_amount', 'amount_log', 'terminal_name_len',
-        'terminal_desc_len', 'items_text_len', 'amount_per_item',
-        'items_price_skew'
-    ]
-   
-    for col in numeric_features_ordered + ['full_text']:
-        if col not in df.columns:
-            df[col] = 0 if col != 'full_text' else ""
-    
-   
-    X_cat = df[numeric_features_ordered + ['full_text']].copy()
-    X_cat[numeric_features_ordered] = X_cat[numeric_features_ordered].astype(float)
-    X_cat['full_text'] = X_cat['full_text'].astype(str)
-
-    X_svc = df[numeric_features_ordered + ['char_text']].copy()
-    X_svc[numeric_features_ordered] = X_svc[numeric_features_ordered].astype(float)
-    X_svc['char_text'] = X_svc['char_text'].astype(str)
-
-    X_lr = df[numeric_features_ordered + ['full_text']].copy()
-    X_lr[numeric_features_ordered] = X_lr[numeric_features_ordered].astype(float)
-    X_lr['full_text'] = X_lr['full_text'].astype(str)
-
-    
-    p_svc = model_svc.predict_proba(X_svc)
-    p_lr  = model_lr_char.predict_proba(X_lr)
-    p_cat = model_cat.predict_proba(X_cat) 
-
-
-    p_ensemble = W_SVC * p_svc + W_LR * p_lr + W_CAT * p_cat
-
-    idx = np.argmax(p_ensemble, axis=1)
-    mcc_pred = le.inverse_transform(idx)
-    confidence = np.max(p_ensemble, axis=1)
-
-    return mcc_pred, confidence
-
+def predict_frame(df):
+    model_input = df[MODEL_NUMERIC_FEATURES + [MODEL_TEXT_FEATURE]].copy()
+    probabilities = model.predict_proba(model_input)
+    predictions = model.predict(model_input)
+    confidence = probabilities.max(axis=1)
+    return predictions, confidence
 
 
 @app.route("/predict", methods=["POST"])
 def predict_single():
-    data = request.get_json()
-
-    if not data:
-        return jsonify({"error": "Empty request body"}), 400
+    app.logger.info("POST /predict")
 
     try:
-        required_fields = ["transaction_id", "terminal_name", "terminal_description", "city", "amount", "items"]
-        for field in required_fields:
-            if field not in data:
-                raise BadRequestError(f"Missing required field: {field}")
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise BadRequestError("payload must be a JSON object")
 
-        items = data.get("items", [])
-        if not isinstance(items, list):
-            raise BadRequestError("items must be a list")
+        app.logger.info("Building features for transaction_id=%s", payload.get("transaction_id"))
+        df = prepare_data({"transactions": [payload]})
 
-        if len(items) == 0:
-            data["items"] = [{"name": "", "price": 0.01}]
-
-
-        df = prepare_data({"transactions": [data]})
-
-        mcc_pred, confidence = ensemble_predict(df)
+        app.logger.info(
+            "Running model inference for transaction_id=%s",
+            payload.get("transaction_id"),
+        )
+        predictions, confidence = predict_frame(df)
 
         return jsonify({
-            "transaction_id": data["transaction_id"],
-            "predicted_mcc": int(mcc_pred[0]),
-            "confidence": float(round(confidence[0], 3))
+            "prediction": int(predictions[0]),
+            "confidence": float(round(confidence[0], 4)),
         })
 
-    except BadRequestError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        app.logger.error(f"Error in /predict: {str(e)}")
+    except BadRequestError as exc:
+        app.logger.warning("Validation error in /predict: %s", exc)
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in /predict")
         return jsonify({"error": "internal server error"}), 500
 
 
 @app.route("/predict/batch", methods=["POST"])
 def predict_batch():
-    data = request.get_json()
-    predictions = []
-    errors = []
+    app.logger.info("POST /predict/batch")
 
     try:
-        if "transactions" not in data:
-            raise BadRequestError("missing 'transactions' key")
-        if not isinstance(data["transactions"], list) or len(data["transactions"]) == 0:
-            raise BadRequestError("'transactions' must be a non-empty list")
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise BadRequestError("payload must be a JSON object")
 
-        for tx in data["transactions"]:
-            tx_id = tx.get("transaction_id", None)
-            if not tx_id:
-                errors.append({"transaction_id": "unknown", "error": "missing transaction_id"})
-                continue
+        df = prepare_data(payload)
+        predictions, confidence = predict_frame(df)
 
-            try:
-                df = prepare_data({"transactions": [tx]})
-                mcc_pred, confidence = ensemble_predict(df)
+        results = []
+        for idx, row in df.reset_index(drop=True).iterrows():
+            results.append({
+                "transaction_id": row["transaction_id"],
+                "prediction": int(predictions[idx]),
+                "confidence": float(round(confidence[idx], 4)),
+            })
 
-                predictions.append({
-                    "transaction_id": tx_id,
-                    "predicted_mcc": int(mcc_pred[0]),
-                    "confidence": float(round(confidence[0], 3))
-                })
+        return jsonify({"predictions": results})
 
-            except BadRequestError as e:
-                errors.append({"transaction_id": tx_id, "error": str(e)})
-            except Exception as e:
-                errors.append({"transaction_id": tx_id, "error": "internal server error"})
-
-        return jsonify({
-            "predictions": predictions,
-            "errors": errors
-        })
-
-    except BadRequestError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
+    except BadRequestError as exc:
+        app.logger.warning("Validation error in /predict/batch: %s", exc)
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        app.logger.exception("Unhandled error in /predict/batch")
         return jsonify({"error": "internal server error"}), 500
 
 
 @app.route("/model/info", methods=["GET"])
 def model_info():
     return jsonify({
-        "model_name": "mcc-ensemble-classifier",
-        "model_version": "1.0.0",
+        "model_name": "mcc-transaction-classifier",
+        "model_version": model_version,
+        "metrics": model_metrics,
     })
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    app.run(host="0.0.0.0", port=8080, debug=False)

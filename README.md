@@ -1,29 +1,69 @@
-# PROD 2026 - ML
+# MCC Transaction Classifier
 
-> [!IMPORTANT]
-> An English version of the README is available here - [README-EN.md](README-EN.md)
+ML pet-project for MCC prediction from transaction metadata and basket items.
 
+The API is implemented with Flask and serves a trained text+numeric classifier from `solution/model/model_bundle.pkl`.
 
-> [!TIP]
-> Задание и FAQ можно найти в отдельном репозитории по ссылке – https://gitlab.prodcontest.com/2026-test-tasks/ml
+## Project layout
 
+- `solution/app.py` - Flask API with `/health`, `/predict`, `/predict/batch`
+- `solution/features.py` - request validation and feature engineering
+- `solution/train_model.py` - model training script
+- `solution/model/` - saved model artifacts
+- `tests/test_api.py` - smoke tests for API endpoints
+- `Dockerfile` - root Docker build for local run
 
-**Используйте данный репозиторий для работы над задачей.**
+## Run locally with Docker
 
+```bash
+docker build -t mcc-classifier-local .
+docker run --rm -p 8080:8080 mcc-classifier-local
+```
 
-> [!WARNING]
-> Помните! Все изменения должны быть строго в директории `solution` и в ветке `main`! Любые другие файлы за пределами директории `solution` защищены от изменений.
+Use `127.0.0.1` for local requests on macOS:
 
-***
+```bash
+curl http://127.0.0.1:8080/health
+```
 
-## Проверка на плагиат
+## Example predict request
 
-Двойная система проверки включает: 
+```bash
+curl -X POST http://127.0.0.1:8080/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transaction_id": "tx-1001",
+    "terminal_name": "SURF COFFEE",
+    "terminal_description": "COFFEE SHOP",
+    "city": "Moscow",
+    "amount": 450.0,
+    "items": [
+      {"name": "latte", "price": 250.0},
+      {"name": "croissant", "price": 200.0}
+    ]
+  }'
+```
 
-Собственное решение организаторов: мы используем алгоритмы для анализа вашего кода, проверяя, что все работы являются оригинальными.
+Example response:
 
-Затем работы участников олимпиады будут проверяться на неправомерные заимствования через сервис Codechecker, продукт компании «Антиплагиат».
+```json
+{
+  "prediction": 5814,
+  "confidence": 0.4721
+}
+```
 
-Рекомендации по использованию стороннего кода: если вы решите использовать код, найденный в открытых источниках, очень важно указать источник этого кода. Это позволит легко проверить и подтвердить подлинность вашей работы, а также развеять любые возможные сомнения. 
+## Train or refresh the model
 
-Мы призываем всех участников соблюдать принципы академической честности и подходить к соревнованиям открыто и добросовестно. Цель олимпиады - не только продемонстрировать свои знания и навыки, но и развиваться как надёжные и ответственные специалисты в будущем.
+```bash
+cd solution
+python3 train_model.py
+```
+
+The training script reports holdout metrics and updates `solution/model/model_bundle.pkl`.
+
+## Run tests
+
+```bash
+pytest
+```
