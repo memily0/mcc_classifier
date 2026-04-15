@@ -1,14 +1,14 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+ENV MCC_CLASSIFIER_PROJECT_ROOT=/app
 
-COPY solution/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY artifacts ./artifacts
 
-COPY solution/app.py ./app.py
-COPY solution/features.py ./features.py
-COPY solution/model/ ./model/
+RUN pip install --no-cache-dir .
 
 EXPOSE 8080
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--access-logfile", "-", "--error-logfile", "-", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--access-logfile", "-", "--error-logfile", "-", "mcc_classifier.api.app:app"]

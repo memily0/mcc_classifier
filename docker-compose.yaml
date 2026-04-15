@@ -8,7 +8,7 @@ services:
     <<: *dnsfix
     build:
       context: .
-      dockerfile: solution/Dockerfile
+      dockerfile: Dockerfile
     image: "${IMAGE_NAME}"
     networks: [isolated]
     ports:
