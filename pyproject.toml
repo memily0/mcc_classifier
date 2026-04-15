@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcc-classifier"
+version = "3.1.0"
+description = "MCC transaction classifier with training, evaluation, and Flask serving."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "flask==3.1.2",
+  "gunicorn==24.1.1",
+  "joblib==1.5.2",
+  "numpy==2.3.3",
+  "pandas==2.3.2",
+  "scikit-learn==1.7.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.4.2",
+]
+
+[project.scripts]
+mcc-train = "mcc_classifier.training.train:main"
+mcc-compare = "mcc_classifier.training.compare_models:main"
+mcc-evaluate = "mcc_classifier.training.evaluate_model:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
